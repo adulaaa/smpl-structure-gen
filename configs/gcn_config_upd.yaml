@@ -1,0 +1,147 @@
+# Standalone experimental config.
+# This file is additive and does not modify configs/default.yaml.
+
+data:
+  source_url: "http://www.cepii.fr/DATA_DOWNLOAD/gravity/data/Gravity_csv_V202211.zip"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  num_workers: 0
+
+  year_start: 2000
+  year_end: 2019
+
+  train_years: [2000, 2014]
+  val_years: [2015, 2016]
+  test_years: [2017, 2019]
+
+  countries:
+    - USA
+    - CHN
+    - JPN
+    - DEU
+    - GBR
+    - FRA
+    - IND
+    - ITA
+    - BRA
+    - CAN
+    - KOR
+    - RUS
+    - AUS
+    - MEX
+    - IDN
+    - TUR
+    - SAU
+    - ARG
+    - ZAF
+    - NLD
+    - CHE
+    - ESP
+    - SGP
+    - THA
+    - MYS
+    - VNM
+    - POL
+    - BEL
+    - SWE
+    - NOR
+    - ARE
+    - IRL
+    - CHL
+    - NGA
+    - EGY
+    - PHL
+    - COL
+    - CZE
+    - NZL
+    - HKG
+
+  node_features:
+    - gdp
+    - gdpcap
+    - pop
+
+  edge_features:
+    - distw_harmonic
+    - contig
+    - comlang_off
+    - col_dep_ever
+    - comrelig
+    - fta_wto
+
+model:
+  # Set active model in train.py via --model override when needed.
+  name: "gcn"
+
+  gcn:
+  # best config after trials so far
+    node_input_dim: 3
+    edge_input_dim: 6
+    hidden_dim: 64
+    num_gnn_layers: 2
+    decoder_hidden_dim: 64
+    dropout: 0.1
+
+  gat:
+    hidden_dim: 32
+    num_gnn_layers: 2
+    heads: 4
+    decoder_hidden_dim: 32
+    dropout: 0.2
+
+  egnn:
+    hidden_dim: 64
+    num_gnn_layers: 3
+    decoder_hidden_dim: 32
+    dropout: 0.2
+
+  rgcn:
+    hidden_dim: 64
+    num_gnn_layers: 3
+    num_relations: 3
+    decoder_hidden_dim: 32
+    dropout: 0.2
+
+  mlp:
+    input_dim: 12
+    hidden_dims: [64, 32]
+    dropout: 0.2
+
+  xgboost:
+    n_estimators: 1000
+    max_depth: 6
+    learning_rate: 0.05
+    subsample: 0.8
+    colsample_bytree: 0.8
+    early_stopping_rounds: 50
+
+  lightgbm:
+    n_estimators: 1000
+    max_depth: 6
+    learning_rate: 0.05
+    num_leaves: 31
+    early_stopping_round: 50
+
+  gae:
+    latent_dim: 16
+    epochs: 100
+
+training:
+  seed: 42
+  max_epochs: 200
+  batch_size: null
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  scheduler:
+    name: "reduce_on_plateau"
+    patience: 10
+    factor: 0.5
+  early_stopping:
+    monitor: "val_loss"
+    patience: 20
+    mode: "min"
+
+logging:
+  project_name: "trade-flow-gcn"
+  save_dir: "lightning_logs"
+  log_every_n_steps: 1

@@ -1,0 +1,126 @@
+# TradeFlowGNN Default Configuration
+# -----------------------------------
+
+# ── Data ──────────────────────────────────────────────────────────────
+data:
+  # CEPII Gravity Database
+  source_url: "http://www.cepii.fr/DATA_DOWNLOAD/gravity/data/Gravity_csv_V202211.zip"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  num_workers: 0
+
+  # NEW: Enable Multilayer Graph using BACI Dataset
+  use_baci: true
+  
+  # NEW: Enable Year-over-Year Delta prediction target
+  # NEW: Enable Year-over-Year Delta prediction target
+  use_deltas: true
+  
+  # NEW: Enable Autoregressive Time-Series routing
+  num_lags: 2
+
+  # Year range for the study
+  year_start: 2000
+  year_end: 2019
+
+  # Temporal split (train on past, validate on recent, test on latest)
+  train_years: [2000, 2014]   # inclusive range
+  val_years: [2015, 2016]
+  test_years: [2017, 2019]
+
+  # Country subset: G20 + major trade partners
+  countries:
+    - USA  # United States
+    - CHN  # China
+    - JPN  # Japan
+    - DEU  # Germany
+    - GBR  # United Kingdom
+    - FRA  # France
+    - IND  # India
+    - ITA  # Italy
+    - BRA  # Brazil
+    - CAN  # Canada
+    - KOR  # South Korea
+    - RUS  # Russia
+    - AUS  # Australia
+    - MEX  # Mexico
+    - IDN  # Indonesia
+    - TUR  # Turkey
+    - SAU  # Saudi Arabia
+    - ARG  # Argentina
+    - ZAF  # South Africa
+    - NLD  # Netherlands
+    - CHE  # Switzerland
+    - ESP  # Spain
+    - SGP  # Singapore
+    - THA  # Thailand
+    - MYS  # Malaysia
+    - VNM  # Vietnam
+    - POL  # Poland
+    - BEL  # Belgium
+    - SWE  # Sweden
+    - NOR  # Norway
+    - ARE  # UAE
+    - IRL  # Ireland
+    - CHL  # Chile
+    - NGA  # Nigeria
+    - EGY  # Egypt
+    - PHL  # Philippines
+    - COL  # Colombia
+    - CZE  # Czech Republic
+    - NZL  # New Zealand
+    - HKG  # Hong Kong
+
+  node_features:
+    - "gdp"
+    - "gdpcap"
+    - "pop"
+
+  edge_features:
+    - "distw_harmonic"
+    - "contig"         
+    - "comlang_off"    
+    - "col_dep_ever"   
+    - "comrelig"       
+    - "fta_wto"        
+
+# ── Model ─────────────────────────────────────────────────────────────
+model:
+  name: "rgcn"   # Switch to RGCN because of multi-edges
+
+  # GCN architecture
+  gcn:
+    node_input_dim: 3
+    edge_input_dim: 27  # base 6 + one-hot 21
+    hidden_dim: 64
+    num_gnn_layers: 3
+    dropout: 0.2
+    decoder_hidden_dim: 32
+
+  # MLP baseline
+  mlp:
+    input_dim: 33  # 2*3 (node) + 27 (edge)
+    hidden_dims: [64, 32]
+    dropout: 0.2
+
+# ── Training ──────────────────────────────────────────────────────────
+training:
+  seed: 42
+  max_epochs: 50
+  batch_size: null
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  scheduler:
+    name: "reduce_on_plateau"
+    patience: 10
+    factor: 0.5
+  early_stopping:
+    monitor: "val_loss"
+    patience: 20
+    mode: "min"
+
+# ── Logging ───────────────────────────────────────────────────────────
+logging:
+  project_name: "trade-flow-gcn"
+  save_dir: "lightning_logs"
+  log_every_n_steps: 1
