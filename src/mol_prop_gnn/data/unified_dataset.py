@@ -15,15 +15,38 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from mol_prop_gnn.data.download import download_moleculenet, get_dataset_info
-from mol_prop_gnn.data.preprocessing import smiles_to_graph, scaffold_split
+from mol_prop_gnn.data.preprocessing import smiles_to_graph, smiles_to_3d_graph, scaffold_split
 from mol_prop_gnn.data.dataset import MoleculeDataModule
 
 logger = logging.getLogger(__name__)
 
 # The fixed set of datasets we are combining for our 5-dimensional map
 UNIFIED_DATASETS = ["bbbp", "esol", "bace", "freesolv", "lipophilicity"]
+
+
+def _process_mol_task(args):
+    """Worker function for multiprocessing graph conversion.
+    
+    Must be defined at the top-level to be picklable by ProcessPoolExecutor.
+    """
+    idx, smiles, y, use_3d = args
+    if not isinstance(smiles, str) or len(smiles) == 0:
+        return None, None, None
+        
+    from mol_prop_gnn.data.preprocessing import smiles_to_graph, smiles_to_3d_graph
+    
+    if use_3d:
+        data = smiles_to_3d_graph(smiles, y=y)
+    else:
+        data = smiles_to_graph(smiles, y=y)
+        
+    if data is not None and data.x.shape[0] > 0:
+        return data, smiles, idx
+    return None, None, None
 
 
 def build_unified_dataframe(raw_dir: str | Path = "data/raw") -> tuple[pd.DataFrame, dict[str, dict]]:
@@ -88,10 +111,16 @@ def preprocess_unified_dataset(
     frac_train: float = 0.8,
     frac_val: float = 0.1,
     frac_test: float = 0.1,
+    use_3d: bool = False,
 ) -> tuple[list[Any], list[int], list[int], list[int]]:
     """Convert the unified DataFrame into PyTorch Geometric Data objects.
 
     Targets are aligned to the order of UNIFIED_DATASETS.
+    
+    Parameters
+    ----------
+    use_3d : bool
+        If True, builds 3D spatial graphs instead of 2D covalent graphs.
     """
     graphs = []
     valid_smiles = []
@@ -99,25 +128,30 @@ def preprocess_unified_dataset(
     # We enforce a strict order of targets in the y-vector
     target_cols = UNIFIED_DATASETS
 
-    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Converting unified SMILES"):
-        smiles = row["smiles"]
-        if not isinstance(smiles, str) or len(smiles) == 0:
-            continue
-            
-        targets = []
-        for col in target_cols:
-            val = row[col]
-            if pd.isna(val):
-                targets.append(float("nan"))
-            else:
-                targets.append(float(val))
-                
-        y = np.array(targets, dtype=np.float32)
-        
-        data = smiles_to_graph(smiles, y=y)
-        if data is not None and data.x.shape[0] > 0:
-            graphs.append(data)
-            valid_smiles.append(smiles)
+    # 1. Prepare tasks using fast zip iteration
+    tasks = []
+    for idx, (smiles, *target_vals) in enumerate(zip(df["smiles"], *[df[c] for c in target_cols])):
+        y = np.array([float(v) if not pd.isna(v) else float("nan") for v in target_vals], dtype=np.float32)
+        tasks.append((idx, smiles, y, use_3d))
+
+    # 2. Parallel Processing
+    n_workers = min(multiprocessing.cpu_count(), len(tasks))
+    if n_workers > 1:
+        logger.info("Starting parallel %s graph conversion across %d cores...", "3D" if use_3d else "2D", n_workers)
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(_process_mol_task, task): task for task in tasks}
+            for future in tqdm(as_completed(futures), total=len(tasks), desc="Converting unified SMILES"):
+                data, sm, i = future.result()
+                if data is not None:
+                    graphs.append(data)
+                    valid_smiles.append(sm)
+    else:
+        # Fallback for single-core or very small datasets
+        for task in tqdm(tasks, desc="Converting unified SMILES"):
+            data, sm, i = _process_mol_task(task)
+            if data is not None:
+                graphs.append(data)
+                valid_smiles.append(sm)
 
     logger.info("Successfully converted %d / %d molecules", len(graphs), len(df))
     

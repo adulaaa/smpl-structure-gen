@@ -17,13 +17,35 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-from torch_geometric.data import Data
+from torch_geometric.data import Data, Batch
+from torch_geometric.utils import subgraph
 
 # Suppress noisy RDKit warnings (invalid SMILES, valence errors)
 from rdkit import RDLogger
 RDLogger.DisableLog("rdApp.*")
 
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 logger = logging.getLogger(__name__)
+
+
+def _process_mol_row_simple(args):
+    """Worker for simple 2D SMILES-to-graph conversion.
+    
+    Must be at top-level for multiprocessing pickling.
+    """
+    idx, smiles, targets = args
+    if not isinstance(smiles, str) or len(smiles) == 0:
+        return None, None, None
+        
+    y = np.array(targets, dtype=np.float32)
+    # This worker is primarily used for the 2D preprocess_moleculenet function
+    data = smiles_to_graph(smiles, y=y)
+    
+    if data is not None and data.x.shape[0] > 0:
+        return data, smiles, idx
+    return None, None, None
 
 
 # ── Atom (Node) Featurization ────────────────────────────────────────────
@@ -203,6 +225,92 @@ def smiles_to_graph(
     if y is not None:
         data.y = torch.tensor(y, dtype=torch.float32).unsqueeze(0)
 
+    return data
+
+
+def manual_radius_graph(pos: torch.Tensor, r: float, loop: bool = False) -> torch.Tensor:
+    """Manual implementation of radius_graph to avoid torch-cluster dependency."""
+    # Compute pairwise Euclidean distances [N, N]
+    dist = torch.cdist(pos, pos)
+    
+    # Mask by radius
+    adj = dist <= r
+    
+    if not loop:
+        adj.fill_diagonal_(False)
+        
+    # Convert to edge_index [2, E]
+    edge_index = adj.nonzero(as_tuple=False).t().contiguous()
+    return edge_index
+
+
+def smiles_to_3d_graph(smiles: str, y: np.ndarray | None = None, cutoff: float = 4.0) -> Data | None:
+    """Convert SMILES to a 3D spatial graph using RDKit conformer generation.
+    
+    Uses ETKDGv3 for 3D coordinates and a spatial radius graph for connectivity.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+    
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    
+    # 1. 3D Conformer Generation (ETKDGv3)
+    # Adding H's is crucial for valid 3D geometry
+    mol = Chem.AddHs(mol)
+    params = AllChem.ETKDGv3()
+    params.randomSeed = 42
+    
+    try:
+        # We must use the params object to correctly access ETKDGv3 (ETversion=3)
+        # as some RDKit versions don't support ETversion=3 via keywords.
+        embed_status = AllChem.EmbedMolecule(mol, params)
+        
+        if embed_status == -1:
+            # Fallback to random coordinates if standard distance geometry fails
+            params.useRandomCoords = True
+            embed_status = AllChem.EmbedMolecule(mol, params)
+            
+        if embed_status == -1:
+            logger.warning("3D Embedding failed for SMILES: %s", smiles)
+            return None
+            
+        # Optimize with a cap on iterations for speed
+        try:
+            # MMFF optimization is the slow part; 200 iterations is a good balance
+            AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
+        except Exception:
+            # Proceed with unoptimized ETKDG coordinates
+            pass
+            
+    except Exception as e:
+        logger.error("Exception during 3D generation for %s: %s", smiles, str(e))
+        return None
+    
+    # 2. Extract Pos and Atomic Numbers
+    conformer = mol.GetConformer()
+    pos = []
+    atomic_nums = []
+    for i in range(mol.GetNumAtoms()):
+        pos.append(list(conformer.GetAtomPosition(i)))
+        atomic_nums.append(mol.GetAtomWithIdx(i).GetAtomicNum())
+    
+    pos = torch.tensor(pos, dtype=torch.float32)
+    x = torch.tensor(atomic_nums, dtype=torch.long) # Used for Embedding(atomic_num)
+    
+    # 3. Spatial Connectivity (Radius Graph)
+    edge_index = manual_radius_graph(pos, r=cutoff, loop=False)
+    
+    # 4. Spatial Edge Features (Euclidean Distances)
+    dist = (pos[edge_index[0]] - pos[edge_index[1]]).norm(dim=-1, keepdim=True)
+    
+    data = Data(x=x, pos=pos, edge_index=edge_index, edge_attr=dist)
+    data.smiles = smiles
+    
+    if y is not None:
+        data.y = torch.tensor(y, dtype=torch.float32).unsqueeze(0)
+        
     return data
 
 
@@ -426,25 +534,32 @@ def preprocess_moleculenet(
     valid_smiles = []
     valid_indices = []
 
-    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Converting SMILES"):
-        smiles = row[smiles_col]
-        if not isinstance(smiles, str) or len(smiles) == 0:
-            continue
+    # 1. Prepare tasks using fast zip iteration
+    tasks = []
+    for idx, (smiles, *target_vals) in enumerate(zip(df[smiles_col], *[df[c] for c in available_targets])):
+        targets = [float("nan") if pd.isna(v) else float(v) for v in target_vals]
+        tasks.append((idx, smiles, targets))
 
-        targets = []
-        for col in available_targets:
-            val = row[col]
-            if pd.isna(val):
-                targets.append(float("nan"))
-            else:
-                targets.append(float(val))
-        y = np.array(targets, dtype=np.float32)
-
-        data = smiles_to_graph(smiles, y=y)
-        if data is not None and data.x.shape[0] > 0:
-            graphs.append(data)
-            valid_smiles.append(smiles)
-            valid_indices.append(idx)
+    # 2. Parallel Processing
+    n_workers = min(multiprocessing.cpu_count(), len(tasks))
+    if n_workers > 1:
+        logger.info("Starting parallel graph conversion across %d cores...", n_workers)
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {executor.submit(_process_mol_row_simple, task): task for task in tasks}
+            for future in tqdm(as_completed(futures), total=len(tasks), desc="Converting SMILES"):
+                data, sm, i = future.result()
+                if data is not None:
+                    graphs.append(data)
+                    valid_smiles.append(sm)
+                    valid_indices.append(i)
+    else:
+        # Fallback
+        for task in tqdm(tasks, desc="Converting SMILES"):
+            data, sm, i = _process_mol_row_simple(task)
+            if data is not None:
+                graphs.append(data)
+                valid_smiles.append(sm)
+                valid_indices.append(idx)
 
     logger.info(
         "Successfully converted %d / %d molecules to graphs",

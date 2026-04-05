@@ -11,6 +11,7 @@ import logging
 import warnings
 from pathlib import Path
 
+import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -35,6 +36,7 @@ from mol_prop_gnn.models.gat import MolGAT
 from mol_prop_gnn.models.egnn import MolEGNN
 from mol_prop_gnn.models.gine import MolGINE
 from mol_prop_gnn.models.rgcn import MolRGCN
+from mol_prop_gnn.models.spatial_mpnn import SpatialMPNN
 
 warnings.filterwarnings("ignore")
 logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
@@ -60,31 +62,51 @@ def build_backbone(name: str, node_dim: int, edge_dim: int) -> nn.Module:
         return MolGINE(node_input_dim=node_dim, edge_input_dim=edge_dim, hidden_dim=hidden_dim, num_gnn_layers=layers)
     elif name == "rgcn":
         return MolRGCN(node_input_dim=node_dim, edge_input_dim=edge_dim, hidden_dim=hidden_dim, num_layers=layers)
+    elif name == "spatial":
+        return SpatialMPNN(hidden_dim=hidden_dim, num_layers=layers, num_rbf=50, cutoff=4.0)
     else:
         raise ValueError(f"Unknown backbone model: {name}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-Dimensional Map Semi-Supervised Training")
-    parser.add_argument("--model", type=str, default="gcn", choices=["gcn", "gat", "egnn", "rgcn", "gine"],
+    parser.add_argument("--model", type=str, default="gcn", choices=["gcn", "gat", "egnn", "rgcn", "gine", "spatial"],
                         help="GNN backbone architecture (default: gcn)")
     parser.add_argument("--epochs", type=int, default=30, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
     parser.add_argument("--contrastive_beta", type=float, default=0.1, help="Weight for GraphCL contrastive loss")
+    parser.add_argument("--use_3d", action="store_true", help="Use 3D spatial graphs (required for 'spatial' model)")
     args = parser.parse_args()
+
+    if args.model == "spatial":
+        args.use_3d = True
 
     logger.info("Initializing multi-dimensional map setup across: %s", UNIFIED_DATASETS)
     logger.info("Backbone Architecture: %s", args.model.upper())
     
     # 1. Prepare Unified Dataset
     df, scaling_stats = build_unified_dataframe(raw_dir="data/raw")
-    graphs, train_idx, val_idx, test_idx = preprocess_unified_dataset(
-        df,
-        seed=42,
-        frac_train=0.8,
-        frac_val=0.1,
-        frac_test=0.1
-    )
+    
+    # Caching Logic: 3D embedding is slow, so we save the result to disk
+    cache_dir = Path("data/processed")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"unified_{'3d' if args.use_3d else '2d'}_cache.pt"
+
+    if cache_path.exists():
+        logger.info("Loading cached processed dataset from %s", cache_path)
+        # Handle weights_only warning in newer torch
+        graphs, train_idx, val_idx, test_idx = torch.load(cache_path, weights_only=False)
+    else:
+        graphs, train_idx, val_idx, test_idx = preprocess_unified_dataset(
+            df,
+            seed=42,
+            frac_train=0.8,
+            frac_val=0.1,
+            frac_test=0.1,
+            use_3d=args.use_3d
+        )
+        logger.info("Saving processed dataset to cache: %s", cache_path)
+        torch.save((graphs, train_idx, val_idx, test_idx), cache_path)
     
     datamodule = MoleculeDataModule(
         graphs=graphs,
