@@ -86,6 +86,7 @@ class MolRGCN(nn.Module):
             h = F.relu(h)
             h = F.dropout(h, p=self.dropout, training=self.training)
             x = norm(h + residual(x))
+        return x
     @property
     def out_channels(self) -> int:
         """Dimension of node embeddings after encoding."""

@@ -1,0 +1,39 @@
+# Simple Supervised Baseline Configuration
+# ----------------------------------------
+# This configuration is used for evaluating tree-based models and simple MLPs
+# on tabular data (Morgan fingerprints, pooled atom features).
+
+# Models to evaluate
+models:
+  - mlp
+  - gcn
+  - rgcn
+  - xgboost
+  - lightgbm
+  - rdkit_rf
+  - gin
+
+hidden_dim: 128
+num_layers: 2
+
+# Training settings (for DL models)
+epochs: 15
+batch_size: 64
+lr: 0.001
+weight_decay: 1e-4
+
+# Graph pooling
+dropout: 0.2
+
+# Data
+datasets:
+  - bbbp
+  - bace
+  - freesolv
+split_type: stratified_butina
+similarity_cutoff: 0.4
+balanced: false
+
+# Hardware settings
+accelerator: auto
+num_workers: 4

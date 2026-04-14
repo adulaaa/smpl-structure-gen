@@ -1,0 +1,48 @@
+# Engineering / Dev Configuration
+# ---------------------------------
+# Tiny model + small datasets for fast CPU-based iteration.
+# Use this to verify code changes, debug training loops, and test
+# the full pipeline end-to-end without waiting for GPU training.
+#
+# Datasets: FreeSolv (642 mols, regression) + BBBP (2039 mols, classification)
+#   → ~2600 unique molecules, covers both task types
+#
+# Model: 32-dim hidden, 2 GNN layers, 32-dim bottleneck
+#   → ~10K parameters, trains in <1 min on CPU
+#
+# Compatible with ALL training scripts:
+#   uv run python scripts/train_semi_supervised.py --config configs/engineering.yaml
+#   uv run python scripts/train_causal.py --config configs/engineering.yaml
+#   uv run python scripts/train_pretrain.py --config configs/engineering.yaml
+
+# GNN backbone — small and fast
+model: gcn
+hidden_dim: 32
+num_layers: 2
+
+# Training — minimal epochs for quick iteration
+epochs: 15
+batch_size: 32
+lr: 0.001
+dropout: 0.2
+bottleneck_dim: 32
+
+# Semi-supervised loss weights
+ortho_beta: 0.01
+contrastive_beta: 0.0   # Disabled — saves augmentation overhead
+
+# Causal loss weights
+sparsity_beta: 0.1
+env_beta: 0.5
+
+# Data — two small datasets covering classification + regression
+datasets:
+  - freesolv
+  - bbbp
+split_type: stratified_butina   # NOT plain scaffold — small datasets get degenerate one-class test splits
+similarity_cutoff: 0.4
+balanced: false
+
+# Infrastructure — CPU-friendly
+accelerator: cpu
+num_workers: 0

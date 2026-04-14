@@ -1,0 +1,20 @@
+# Configuration for Label Sparsity Experiment
+# Emulates classical supervised degradation against PyTorch graph resilience.
+
+dataset_name: tox21
+retention_rates: [0.1, 0.02]
+models:
+  - gin
+  - xgboost
+
+split_type: stratified_butina
+similarity_cutoff: 0.4
+
+# PyTorch Lightning Settings
+epochs: 30
+batch_size: 128
+lr: 0.001
+hidden_dim: 32
+num_layers: 2
+dropout: 0.2
+bottleneck_dim: 32

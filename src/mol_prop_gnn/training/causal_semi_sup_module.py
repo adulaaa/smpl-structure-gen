@@ -9,7 +9,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchmetrics import Accuracy, MeanSquaredError
+from torchmetrics import Accuracy, MeanSquaredError, MeanAbsoluteError, R2Score
 from torchmetrics.classification import BinaryAUROC
 from clearml import Task
 
@@ -49,9 +49,21 @@ class CausalSemiSupModule(pl.LightningModule):
         self.val_auroc = nn.ModuleList([BinaryAUROC() if tt == "classification" else None for tt in task_types])
         self.test_auroc = nn.ModuleList([BinaryAUROC() if tt == "classification" else None for tt in task_types])
         
+        self.train_acc = nn.ModuleList([Accuracy(task="binary") if tt == "classification" else None for tt in task_types])
+        self.val_acc = nn.ModuleList([Accuracy(task="binary") if tt == "classification" else None for tt in task_types])
+        self.test_acc = nn.ModuleList([Accuracy(task="binary") if tt == "classification" else None for tt in task_types])
+
         self.train_rmse = nn.ModuleList([MeanSquaredError(squared=False) if tt == "regression" else None for tt in task_types])
         self.val_rmse = nn.ModuleList([MeanSquaredError(squared=False) if tt == "regression" else None for tt in task_types])
         self.test_rmse = nn.ModuleList([MeanSquaredError(squared=False) if tt == "regression" else None for tt in task_types])
+
+        self.train_mae = nn.ModuleList([MeanAbsoluteError() if tt == "regression" else None for tt in task_types])
+        self.val_mae = nn.ModuleList([MeanAbsoluteError() if tt == "regression" else None for tt in task_types])
+        self.test_mae = nn.ModuleList([MeanAbsoluteError() if tt == "regression" else None for tt in task_types])
+
+        self.train_r2 = nn.ModuleList([R2Score() if tt == "regression" else None for tt in task_types])
+        self.val_r2 = nn.ModuleList([R2Score() if tt == "regression" else None for tt in task_types])
+        self.test_r2 = nn.ModuleList([R2Score() if tt == "regression" else None for tt in task_types])
         
         self.latest_test_results = {}
 
@@ -93,10 +105,13 @@ class CausalSemiSupModule(pl.LightningModule):
                 # Update metrics on Causal Subgraph ONLY (this is our true predictor)
                 if stage == "train":
                     self.train_auroc[i](valid_pc, valid_target.long())
+                    self.train_acc[i](valid_pc, valid_target.long())
                 elif stage == "val":
                     self.val_auroc[i](valid_pc, valid_target.long())
+                    self.val_acc[i](valid_pc, valid_target.long())
                 elif stage == "test":
                     self.test_auroc[i](valid_pc, valid_target.long())
+                    self.test_acc[i](valid_pc, valid_target.long())
                     
             elif tt == "regression":
                 lc = self.mse_loss(valid_pc, valid_target)
@@ -107,10 +122,16 @@ class CausalSemiSupModule(pl.LightningModule):
                 
                 if stage == "train":
                     self.train_rmse[i](valid_pc, valid_target)
+                    self.train_mae[i](valid_pc, valid_target)
+                    self.train_r2[i].update(valid_pc, valid_target)
                 elif stage == "val":
                     self.val_rmse[i](valid_pc, valid_target)
+                    self.val_mae[i](valid_pc, valid_target)
+                    self.val_r2[i].update(valid_pc, valid_target)
                 elif stage == "test":
                     self.test_rmse[i](valid_pc, valid_target)
+                    self.test_mae[i](valid_pc, valid_target)
+                    self.test_r2[i].update(valid_pc, valid_target)
 
         # Objective Function
         total_loss = causal_loss
@@ -169,34 +190,53 @@ class CausalSemiSupModule(pl.LightningModule):
                 metric_obj = getattr(self, f"{stage}_auroc")[i]
                 try:
                     val = metric_obj.compute().item()
+                    acc_val = getattr(self, f"{stage}_acc")[i].compute().item()
                     ds_name = self.target_to_ds.get(name, "unknown").upper()
                     
                     self.log(f"{stage}/{ds_name} C-AUROC/{name}", val, prog_bar=(stage != "train"), sync_dist=True)
+                    self.log(f"{stage}/{ds_name} C-ACC/{name}", acc_val, sync_dist=True)
+
                     if cl_logger and stage == "test":
                         cl_logger.report_single_value(name=f"TEST_{ds_name}_C-AUROC_{name}", value=val)
+                        cl_logger.report_single_value(name=f"TEST_{ds_name}_C-ACC_{name}", value=acc_val)
                         
                     results[f"{stage}_{name}_auroc"] = val
+                    results[f"{stage}_{name}_acc"] = acc_val
                     overall_metric += val
                     num_valid += 1
                 except ValueError:
                     pass
                 metric_obj.reset()
+                getattr(self, f"{stage}_acc")[i].reset()
             else:
                 metric_obj = getattr(self, f"{stage}_rmse")[i]
+                mae_obj = getattr(self, f"{stage}_mae")[i]
+                r2_obj = getattr(self, f"{stage}_r2")[i]
                 try:
                     val = metric_obj.compute().item()
+                    mae_val = mae_obj.compute().item()
+                    r2_val = r2_obj.compute().item()
                     ds_name = self.target_to_ds.get(name, "unknown").upper()
                     
                     self.log(f"{stage}/{ds_name} C-RMSE/{name}", val, prog_bar=(stage != "train"), sync_dist=True)
+                    self.log(f"{stage}/{ds_name} C-MAE/{name}", mae_val, sync_dist=True)
+                    self.log(f"{stage}/{ds_name} C-R2/{name}", r2_val, sync_dist=True)
+
                     if cl_logger and stage == "test":
                         cl_logger.report_single_value(name=f"TEST_{ds_name}_C-RMSE_{name}", value=val)
+                        cl_logger.report_single_value(name=f"TEST_{ds_name}_C-MAE_{name}", value=mae_val)
+                        cl_logger.report_single_value(name=f"TEST_{ds_name}_C-R2_{name}", value=r2_val)
                         
                     results[f"{stage}_{name}_rmse"] = val
+                    results[f"{stage}_{name}_mae"] = mae_val
+                    results[f"{stage}_{name}_r2"] = r2_val
                     overall_metric += -val 
                     num_valid += 1
                 except ValueError:
                     pass
                 metric_obj.reset()
+                mae_obj.reset()
+                r2_obj.reset()
 
         if num_valid > 0:
             avg_score = overall_metric / num_valid

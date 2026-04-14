@@ -1,7 +1,12 @@
-"""Script to train the semi-supervised joint embedding model across 5 MoleculeNet datasets.
+"""Script to train the semi-supervised joint embedding model across MoleculeNet datasets.
 
 Creates an interpretable latent "Multi-Dimensional Map" where each dataset is isolated
 to a single dimension.
+
+Usage:
+    uv run python scripts/train_semi_supervised.py --config configs/semi_supervised.yaml
+    uv run python scripts/train_semi_supervised.py --config configs/engineering.yaml
+    uv run python scripts/train_semi_supervised.py --config configs/semi_supervised.yaml --model pna
 """
 
 from __future__ import annotations
@@ -27,15 +32,9 @@ from mol_prop_gnn.data.preprocessing import (
     get_edge_feature_dim
 )
 from mol_prop_gnn.data.dataset import MoleculeDataModule
-from mol_prop_gnn.models.joint_embedder import JointMolEmbedder
 from mol_prop_gnn.models.factory import build_joint_model
 from mol_prop_gnn.training.semi_sup_module import JointSemiSupModule
-
-# Model imports for the factory
-from mol_prop_gnn.models.gcn import MolGCN
-from mol_prop_gnn.models.gin import MolGIN
-from mol_prop_gnn.models.pna import MolPNA
-from mol_prop_gnn.models.rgcn import MolRGCN
+from mol_prop_gnn.utils.config import apply_config_to_parser
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -43,30 +42,13 @@ logger = logging.getLogger(__name__)
 torch.set_float32_matmul_precision('medium')
 
 
-def build_backbone(name: str, node_dim: int, edge_dim: int, datamodule: MoleculeDataModule = None) -> nn.Module:
-    """Factory to build the GNN encoder backbone."""
-    # We use slightly larger defaults for the multi-task backbone 
-    # to ensure it has enough capacity for 5 datasets.
-    hidden_dim = 256
-    layers = 5
-
-    if name == "gcn":
-        return MolGCN(node_input_dim=node_dim, edge_input_dim=edge_dim, hidden_dim=hidden_dim, num_gnn_layers=layers)
-    elif name == "gin":
-        return MolGIN(node_input_dim=node_dim, hidden_dim=hidden_dim, num_gnn_layers=layers)
-    elif name == "pna":
-        deg = datamodule.get_degree_histogram()
-        return MolPNA(deg=deg, node_input_dim=node_dim, edge_input_dim=edge_dim, hidden_dim=hidden_dim, num_gnn_layers=layers)
-    elif name == "rgcn":
-        return MolRGCN(node_input_dim=node_dim, edge_input_dim=edge_dim, hidden_dim=hidden_dim, num_layers=layers)
-    else:
-        raise ValueError(f"Unknown backbone model: {name}")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-Dimensional Map Semi-Supervised Training")
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file (CLI args override config values)")
     parser.add_argument("--model", type=str, default="gcn", choices=["gcn", "gin", "pna", "rgcn"],
                         help="GNN backbone architecture (default: gcn)")
+    parser.add_argument("--hidden_dim", type=int, default=256, help="Hidden dimension for GNN backbone")
+    parser.add_argument("--num_layers", type=int, default=5, help="Number of GNN message-passing layers")
     parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
@@ -82,8 +64,13 @@ def main() -> None:
                         help="Data splitting methodology (default: stratified_butina)")
     parser.add_argument("--similarity_cutoff", type=float, default=0.4, help="Butina similarity cutoff")
     parser.add_argument("--balanced", action="store_true", default=False, help="Use balanced sampler for training")
-    # Defaulting to all 7 datasets: 5 original + HIV + Tox21
+    parser.add_argument("--accelerator", type=str, default="auto", help="Hardware accelerator (auto, cpu, gpu)")
     parser.add_argument("--datasets", nargs="+", default=["bbbp", "esol", "bace", "freesolv", "lipophilicity", "hiv", "tox21"], help="Datasets to use for training")
+
+    # Two-pass parsing: load config defaults first, then CLI overrides
+    args, _ = parser.parse_known_args()
+    if args.config:
+        apply_config_to_parser(parser, args.config)
     args = parser.parse_args()
 
     # Initialize ClearML for experiment tracking
@@ -117,13 +104,10 @@ def main() -> None:
         use_balanced_sampler=args.balanced
     )
     
-    # Ensure datamodule is setup for PNA
     datamodule.setup()
     
     node_dim = get_node_feature_dim()
     edge_dim = get_edge_feature_dim()
-
-    datamodule.setup()
     
     model_config = {
         "backbone_name": args.model,
@@ -131,6 +115,8 @@ def main() -> None:
         "edge_dim": edge_dim,
         "num_tasks": len(target_names),
         "bottleneck_dim": args.bottleneck_dim,
+        "hidden_dim": args.hidden_dim,
+        "num_layers": args.num_layers,
         "dropout": args.dropout,
         "deg": datamodule.get_degree_histogram() if args.model == "pna" else None,
     }
@@ -163,7 +149,7 @@ def main() -> None:
         task_types=task_types,
         dataset_names=target_names,
         learning_rate=args.lr,
-        ortho_beta=0.01,
+        ortho_beta=args.ortho_beta,
         contrastive_beta=args.contrastive_beta,
         target_to_ds=target_to_ds,
         model_config=model_config
@@ -184,7 +170,7 @@ def main() -> None:
     )
 
     trainer = pl.Trainer(
-        accelerator="gpu",
+        accelerator=args.accelerator,
         devices=1,
         max_epochs=args.epochs,
         check_val_every_n_epoch=2,
@@ -198,7 +184,7 @@ def main() -> None:
     trainer.fit(
         lit_module, 
         train_dataloaders=datamodule.train_dataloader(),
-        val_dataloaders=[datamodule.val_dataloader(), datamodule.test_dataloader()],
+        val_dataloaders=datamodule.val_dataloader(),
         ckpt_path=args.checkpoint
     )
     

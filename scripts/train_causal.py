@@ -2,6 +2,11 @@
 
 Splits molecular graphs into Causal and Scaffold subgraphs dynamically during
 training to isolate mechanisms of action and prevent spurious correlations.
+
+Usage:
+    uv run python scripts/train_causal.py --config configs/causal.yaml
+    uv run python scripts/train_causal.py --config configs/engineering.yaml
+    uv run python scripts/train_causal.py --config configs/causal.yaml --model pna
 """
 
 from __future__ import annotations
@@ -20,9 +25,9 @@ from mol_prop_gnn.data.unified_dataset import DEFAULT_DATASETS, build_unified_da
 from mol_prop_gnn.data.preprocessing import get_node_feature_dim, get_edge_feature_dim
 from mol_prop_gnn.data.dataset import MoleculeDataModule
 from mol_prop_gnn.models.factory import build_causal_model
-
-# We use the Causal Module
 from mol_prop_gnn.training.causal_semi_sup_module import CausalSemiSupModule
+from mol_prop_gnn.utils.config import apply_config_to_parser
+from mol_prop_gnn.visualization.causal_mask import CausalVisualizationCallback
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -32,8 +37,11 @@ torch.set_float32_matmul_precision('medium')
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Map Semi-Supervised Training via Graph Causal Learning")
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file (CLI args override config values)")
     parser.add_argument("--model", type=str, default="gcn", choices=["gcn", "gin", "pna", "rgcn"],
                         help="GNN backbone architecture (default: gcn)")
+    parser.add_argument("--hidden_dim", type=int, default=256, help="Hidden dimension for GNN backbone")
+    parser.add_argument("--num_layers", type=int, default=5, help="Number of GNN message-passing layers")
     parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
@@ -45,8 +53,13 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint to resume training from")
     parser.add_argument("--split_type", type=str, default="stratified_butina", choices=["random", "scaffold", "butina", "stratified_butina"], help="Data splitting methodology")
     parser.add_argument("--similarity_cutoff", type=float, default=0.4, help="Similarity cutoff for Butina clustering")
+    parser.add_argument("--accelerator", type=str, default="auto", help="Hardware accelerator (auto, cpu, gpu)")
     parser.add_argument("--datasets", nargs="+", default=["bbbp", "esol", "freesolv", "lipophilicity", "bace", "hiv", "tox21"], help="Datasets to run Causal Learning on")
     
+    # Two-pass parsing: load config defaults first, then CLI overrides
+    args, _ = parser.parse_known_args()
+    if args.config:
+        apply_config_to_parser(parser, args.config)
     args = parser.parse_args()
     
     task = Task.init(
@@ -89,6 +102,8 @@ def main() -> None:
         "edge_dim": edge_dim,
         "num_tasks": len(target_names),
         "bottleneck_dim": args.bottleneck_dim,
+        "hidden_dim": args.hidden_dim,
+        "num_layers": args.num_layers,
         "dropout": args.dropout,
         "deg": datamodule.get_degree_histogram() if args.model == "pna" else None,
     }
@@ -116,17 +131,26 @@ def main() -> None:
         every_n_epochs=10
     )
     
+    # Causal mask visualization callback (reports atom importance heatmaps to ClearML)
+    viz_callback = CausalVisualizationCallback(
+        sample_graphs=list(datamodule.test_dataset),
+        task_names=target_names,
+        task_types=task_types,
+        num_samples=6,
+        every_n_val=1,
+    )
+    
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir="lightning_logs",
         name=f"causal_ssl_{args.model}"
     )
 
     trainer = pl.Trainer(
-        accelerator="gpu",
+        accelerator=args.accelerator,
         devices=1,
         max_epochs=args.epochs,
         check_val_every_n_epoch=2,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, viz_callback],
         logger=tb_logger,
         enable_progress_bar=True,
     )

@@ -1,0 +1,28 @@
+# Benchmarking Causal vs Vanilla vs Tabular
+#   BBBP (Classification)
+#   BACE (Classification)
+#   FreeSolv (Regression)
+
+datasets: ["bbbp", "bace", "freesolv"]
+models: ["gcn", "gin"]
+tabular_models: ["xgboost", "lightgbm", "rdkit_rf"]
+
+# Shared Hyperparameters
+hidden_dim: 32
+num_layers: 2
+dropout: 0.1
+bottleneck_dim: 32
+
+# GNN Training Settings
+epochs: 50
+batch_size: 128
+lr: 0.001
+weight_decay: 0.0001
+
+# Causal Specific
+sparsity_beta: 0.05
+env_beta: 0.2
+
+# Data Splitting
+split_type: "stratified_butina"
+similarity_cutoff: 0.4

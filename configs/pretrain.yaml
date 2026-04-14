@@ -1,0 +1,35 @@
+# Large-Scale Pretraining Configuration (HIV + Tox21)
+# ----------------------------------------------------
+# Pretrains the GNN backbone on ~49K molecules across 13 targets.
+# The resulting checkpoint can be used for fine-tuning via:
+#   uv run python scripts/train_semi_supervised.py --backbone_path <checkpoint>
+#
+# Usage:
+#   uv run python scripts/train_pretrain.py --config configs/pretrain.yaml
+
+# GNN backbone architecture (gcn, gin, pna)
+model: gcn
+hidden_dim: 256
+num_layers: 5
+
+# Training hyperparameters
+epochs: 20
+batch_size: 1024
+lr: 0.001
+dropout: 0.3
+bottleneck_dim: 256
+
+# Loss weights (stronger disentanglement for pretraining)
+contrastive_beta: 0.1
+
+# Data — large classification datasets only
+datasets:
+  - hiv
+  - tox21
+split_type: scaffold
+similarity_cutoff: 0.4
+balanced: true
+
+# Infrastructure
+accelerator: auto
+num_workers: 8

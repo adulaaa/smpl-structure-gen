@@ -3,6 +3,10 @@
 Pretrains the GNN backbone using a combination of supervised multi-task 
 learning on 13 targets (1 HIV + 12 Tox21 assays) and self-supervised 
 GraphCL contrastive learning.
+
+Usage:
+    uv run python scripts/train_pretrain.py --config configs/pretrain.yaml
+    uv run python scripts/train_pretrain.py --config configs/engineering.yaml
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from mol_prop_gnn.data.preprocessing import (
 from mol_prop_gnn.data.dataset import MoleculeDataModule
 from mol_prop_gnn.models.factory import build_joint_model
 from mol_prop_gnn.training.semi_sup_module import JointSemiSupModule
+from mol_prop_gnn.utils.config import apply_config_to_parser
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger(__name__)
@@ -51,7 +56,10 @@ class MetricSpy(Callback):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Large-Scale Pretraining on HIV and Tox21")
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file (CLI args override config values)")
     parser.add_argument("--model", type=str, default="gcn", choices=["gcn", "gin", "pna"], help="Backbone model")
+    parser.add_argument("--hidden_dim", type=int, default=256, help="Hidden dimension for GNN backbone")
+    parser.add_argument("--num_layers", type=int, default=5, help="Number of GNN message-passing layers")
     parser.add_argument("--epochs", type=int, default=20, help="Number of pretraining epochs")
     parser.add_argument("--batch_size", type=int, default=1024, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
@@ -63,6 +71,12 @@ def main() -> None:
     parser.add_argument("--datasets", nargs="+", default=DEFAULT_PRETRAIN_DATASETS, help="Datasets to pretrain on")
     parser.add_argument("--split_type", type=str, default="scaffold", choices=["random", "scaffold", "butina", "stratified_butina"], help="Data splitting methodology")
     parser.add_argument("--similarity_cutoff", type=float, default=0.4, help="Similarity cutoff for Butina clustering")
+    parser.add_argument("--accelerator", type=str, default="auto", help="Hardware accelerator (auto, cpu, gpu)")
+
+    # Two-pass parsing: load config defaults first, then CLI overrides
+    args, _ = parser.parse_known_args()
+    if args.config:
+        apply_config_to_parser(parser, args.config)
     args = parser.parse_args()
     
     # Initialize ClearML
@@ -107,6 +121,8 @@ def main() -> None:
         "edge_dim": edge_dim,
         "num_tasks": len(target_names),
         "bottleneck_dim": args.bottleneck_dim,
+        "hidden_dim": args.hidden_dim,
+        "num_layers": args.num_layers,
         "dropout": args.dropout,
         "deg": datamodule.get_degree_histogram() if args.model == "pna" else None,
     }
@@ -135,7 +151,7 @@ def main() -> None:
     )
     
     trainer = pl.Trainer(
-        accelerator="gpu",
+        accelerator=args.accelerator,
         devices=1,
         max_epochs=args.epochs,
         check_val_every_n_epoch=2,

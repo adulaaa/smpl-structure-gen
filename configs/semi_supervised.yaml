@@ -1,0 +1,43 @@
+# Semi-Supervised Joint Embedding Training Configuration
+# -------------------------------------------------------
+# Multi-task training across MoleculeNet datasets with:
+#   - Uncertainty Weighting (auto task balancing)
+#   - Disentanglement Loss (orthogonal output dimensions)
+#   - GraphCL Contrastive Loss (augmentation-based self-supervision)
+#
+# Usage:
+#   uv run python scripts/train_semi_supervised.py --config configs/semi_supervised.yaml
+#   uv run python scripts/train_semi_supervised.py --config configs/semi_supervised.yaml --model pna
+
+# GNN backbone architecture (gcn, gin, pna, rgcn)
+model: gin
+hidden_dim: 64
+num_layers: 3
+
+# Training hyperparameters
+epochs: 30
+batch_size: 128
+lr: 0.001
+dropout: 0.2
+bottleneck_dim: 64
+
+# Loss weights
+ortho_beta: 0.01        # Disentanglement constraint weight
+contrastive_beta: 0.1   # GraphCL contrastive loss weight
+
+# Data
+datasets:
+  - bbbp
+  - esol
+  - bace
+  - freesolv
+  - lipophilicity
+  - hiv
+  - tox21
+split_type: stratified_butina
+similarity_cutoff: 0.4
+balanced: false
+
+# Infrastructure
+accelerator: auto
+num_workers: 8
