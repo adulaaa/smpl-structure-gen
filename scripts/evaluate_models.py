@@ -27,7 +27,9 @@ from mol_prop_gnn.models.mlp_baseline import MLPBaseline
 from mol_prop_gnn.models.rdkit_baseline import RDKitBaseline
 from mol_prop_gnn.models.xgboost_baseline import XGBoostBaseline
 from mol_prop_gnn.models.lightgbm_baseline import LightGBMBaseline
-from mol_prop_gnn.training.lightning_module import MolPropertyModule
+from mol_prop_gnn.models.sage import MolGraphSAGE
+from mol_prop_gnn.models.transformer import MolTransformerGNN
+from mol_prop_gnn.training.supervised_module import MolPropertyModule
 from mol_prop_gnn.evaluation.metrics import compute_all_metrics
 import torch_geometric
 
@@ -138,9 +140,11 @@ def main():
     output_dim = data_cfg.get("num_tasks", 1)
 
     dl_models = [
-        ("gcn", MolGCN(node_input_dim=node_dim, edge_input_dim=edge_dim, output_dim=output_dim)),
-        ("rgcn", MolRGCN(node_input_dim=node_dim, edge_input_dim=edge_dim, output_dim=output_dim)),
-        ("mlp_baseline", MLPBaseline(input_dim=node_dim, output_dim=output_dim)),
+    ("gcn", MolGCN(node_input_dim=node_dim, edge_input_dim=edge_dim, output_dim=output_dim)),
+    ("rgcn", MolRGCN(node_input_dim=node_dim, edge_input_dim=edge_dim, output_dim=output_dim)),
+    ("sage", MolGraphSAGE(node_input_dim=node_dim, edge_input_dim=edge_dim, output_dim=output_dim)),
+    ("transformer", MolTransformerGNN(node_input_dim=node_dim, edge_input_dim=edge_dim, output_dim=output_dim)),
+    ("mlp_baseline", MLPBaseline(input_dim=node_dim, output_dim=output_dim)),
     ]
 
     for m_name, net in dl_models:
