@@ -98,8 +98,7 @@ class MolTransformerGNN(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(decoder_hidden_dim, output_dim),
         )
-
-    @property
+        
     def out_channels(self) -> int:
         return self.hidden_dim
 
