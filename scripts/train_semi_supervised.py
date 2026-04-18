@@ -45,7 +45,7 @@ torch.set_float32_matmul_precision('medium')
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-Dimensional Map Semi-Supervised Training")
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config file (CLI args override config values)")
-    parser.add_argument("--model", type=str, default="gcn", choices=["gcn", "gin", "pna", "rgcn", "sage", "transformer"],
+    parser.add_argument("--model", type=str, default="gcn", choices=["gcn", "gin", "pna", "rgcn", "sage", "transformer", "mlp_baseline"],
                         help="GNN backbone architecture (default: gcn)")
     parser.add_argument("--hidden_dim", type=int, default=256, help="Hidden dimension for GNN backbone")
     parser.add_argument("--num_layers", type=int, default=5, help="Number of GNN message-passing layers")
@@ -109,19 +109,27 @@ def main() -> None:
     node_dim = get_node_feature_dim()
     edge_dim = get_edge_feature_dim()
     
-    model_config = {
-        "backbone_name": args.model,
-        "node_dim": node_dim,
-        "edge_dim": edge_dim,
-        "num_tasks": len(target_names),
-        "bottleneck_dim": args.bottleneck_dim,
-        "hidden_dim": args.hidden_dim,
-        "num_layers": args.num_layers,
-        "dropout": args.dropout,
-        "deg": datamodule.get_degree_histogram() if args.model == "pna" else None,
-    }
-    
-    model = build_joint_model(**model_config)
+    if args.model == "mlp_baseline":
+        from mol_prop_gnn.models.mlp_baseline import MLPBaseline
+        model = MLPBaseline(
+            input_dim=node_dim,
+            hidden_dims=[256, 128],
+            dropout=args.dropout,
+            output_dim=len(target_names)
+        )
+    else:
+        model_config = {
+            "backbone_name": args.model,
+            "node_dim": node_dim,
+            "edge_dim": edge_dim,
+            "num_tasks": len(target_names),
+            "bottleneck_dim": args.bottleneck_dim,
+            "hidden_dim": args.hidden_dim,
+            "num_layers": args.num_layers,
+            "dropout": args.dropout,
+            "deg": datamodule.get_degree_histogram() if args.model == "pna" else None,
+        }
+        model = build_joint_model(**model_config)
 
     # Handle Backbone Loading
     if args.backbone_path:
