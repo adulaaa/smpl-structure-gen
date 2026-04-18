@@ -146,8 +146,11 @@ def run_dataset_benchmark(base_config, dataset_name, dataset_info):
             experiment=f"{dataset_name}_{model_name}",
             task_type=task_type,
         )
-        test_key = f"test_{metric_key}"
-        results[model_name.upper().replace("_BASELINE", "")] = m.get(test_key, 0.0)
+        if task_type == "classification":
+            val = m.get("auroc", m.get("test_auroc", 0.0))
+        else:
+            val = m.get("rmse", m.get("test_rmse", 0.0))
+        results[model_name.upper().replace("_BASELINE", "")] = val
 
     return results
 
