@@ -138,7 +138,7 @@ def main() -> None:
         "--model",
         type=str,
         default=None,
-        help="Model name override (gcn, rgcn, sage, transformer, mlp_baseline)",,
+        help="Model name override (gcn, rgcn, sage, transformer, mlp_baseline)",
     )
     parser.add_argument(
         "--checkpoint",
