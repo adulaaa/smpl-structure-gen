@@ -101,7 +101,7 @@ class MolTransformerGNN(nn.Module):
 
     @property
     def out_channels(self) -> int:
-        return self.hidden_dim
+        return self.graph_readout[0].in_features
 
     def encode(self, x, edge_index, edge_attr):
         for block in self.blocks:
